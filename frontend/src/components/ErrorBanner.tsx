@@ -6,6 +6,8 @@ interface ErrorBannerProps {
   onReset: () => void;
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message, onRetry, onReset }) => {
   return (
     <div className="workspace-error-card">
@@ -16,7 +18,7 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message, onRetry, onRe
         </div>
         <p className="error-message-text">{message}</p>
         <span className="error-tip">
-          Make sure your server endpoint is active at <code>http://127.0.0.1:8000</code> and the image file is clear.
+          Make sure your server endpoint is active at <code>{API_URL}</code> and the image file is clear.
         </span>
 
         <div className="error-actions-group">

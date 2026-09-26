@@ -15,6 +15,8 @@ import { combineInspectionResults } from './utils/multiImage';
 import { getHistory, saveToHistory, clearHistory, createThumbnail } from './utils/history';
 import './App.css';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export function App() {
   const [images, setImages] = useState<SelectedImage[]>([]);
   const [result, setResult] = useState<InspectionResponse | null>(null);
@@ -109,7 +111,7 @@ export function App() {
 
         let response: Response;
         try {
-          response = await fetch('http://127.0.0.1:8000/inspect', {
+          response = await fetch(`${API_URL}/inspect`, {
             method: 'POST',
             body: formData,
           });
@@ -166,7 +168,7 @@ export function App() {
           : 'Could not connect to the inspection backend server.';
 
       if (message === 'Failed to fetch') {
-        message = 'Could not connect to backend server at http://127.0.0.1:8000. Please ensure the backend server is running.';
+        message = `Could not connect to backend server at ${API_URL}. Please ensure the backend server is running.`;
       }
 
       setErrorMsg(message);
@@ -181,7 +183,7 @@ export function App() {
     try {
       let response: Response;
       try {
-        response = await fetch('http://127.0.0.1:8000/inspect-url', {
+        response = await fetch(`${API_URL}/inspect-url`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url }),
@@ -229,7 +231,7 @@ export function App() {
           : 'Could not connect to the inspection backend server.';
 
       if (message === 'Failed to fetch') {
-        message = 'Could not connect to backend server at http://127.0.0.1:8000. Please ensure the backend server is running.';
+        message = `Could not connect to backend server at ${API_URL}. Please ensure the backend server is running.`;
       }
 
       setErrorMsg(message);
