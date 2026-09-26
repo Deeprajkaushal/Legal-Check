@@ -1,0 +1,145 @@
+{
+  "version": "1.2",
+  "project": "LegalCheck",
+  "problem_id": "SIH26034",
+  "scope": "Prototype screening rules for retail pre-packaged commodities",
+  "notes": [
+    "These rules are a prototype configuration for AI-assisted screening, not a complete codification of Legal Metrology law.",
+    "The engine reports potential non-compliance and requires human verification before legal or enforcement action.",
+    "Applicability is intentionally conservative where package context is uncertain."
+  ],
+  "rules": [
+    {
+      "rule_id": "LM-PKG-001",
+      "rule_number": "Rule 6",
+      "field": "manufacturer",
+      "requirement": "Name and address of the manufacturer, packer or importer must be declared for retail packages.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6; Department of Consumer Affairs advisory dated 18-01-2023"
+    },
+    {
+      "rule_id": "LM-PKG-002",
+      "rule_number": "Rule 6",
+      "field": "product_name",
+      "requirement": "The common or generic name of the commodity contained in the package must be declared.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-003",
+      "rule_number": "Rule 6",
+      "field": "net_quantity",
+      "requirement": "Net quantity must be declared in terms of the applicable standard unit of weight, measure or number.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-004",
+      "rule_number": "Rule 6",
+      "field": "manufacturing_date",
+      "requirement": "Month and year of manufacture, packing or import must be declared as applicable.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-005",
+      "rule_number": "Rule 6",
+      "field": "best_before",
+      "requirement": "Best before/use by information must be declared for commodities which may become unfit for human consumption.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ],
+        "has_shelf_life": true
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-006",
+      "rule_number": "Rule 6",
+      "field": "mrp",
+      "requirement": "Retail sale price must be declared in the form of Maximum Retail Price (MRP), inclusive of all taxes.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-007",
+      "rule_number": "Rule 6",
+      "field": "consumer_care",
+      "requirement": "Consumer care details must be declared.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-008",
+      "rule_number": "Rule 6",
+      "field": "country_of_origin",
+      "requirement": "Country of origin must be declared for imported products.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ],
+        "is_imported": true
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6"
+    },
+    {
+      "rule_id": "LM-PKG-009",
+      "rule_number": "Rule 6(11)",
+      "field": "unit_sale_price",
+      "requirement": "Unit sale price must be declared in the prescribed form for applicable pre-packaged commodities; exceptions require contextual verification.",
+      "check_type": "presence",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 6(11), as amended"
+    },
+    {
+      "rule_id": "LM-PKG-010",
+      "rule_number": "Rule 9",
+      "field": "declaration_legibility",
+      "requirement": "Declarations required on the package must be legible and prominent.",
+      "check_type": "visual",
+      "applicability": {
+        "categories": [
+          "all"
+        ]
+      },
+      "source": "Legal Metrology (Packaged Commodities) Rules, 2011, Rule 9(1)(a)"
+    }
+  ]
+}
