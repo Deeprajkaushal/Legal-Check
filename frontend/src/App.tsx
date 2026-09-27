@@ -15,7 +15,7 @@ import { combineInspectionResults } from './utils/multiImage';
 import { getHistory, saveToHistory, clearHistory, createThumbnail } from './utils/history';
 import './App.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://legalcheck-backend.onrender.com';
 
 export function App() {
   const [images, setImages] = useState<SelectedImage[]>([]);
@@ -109,18 +109,10 @@ export function App() {
         const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
         formData.append('image', imageFile, imageFile.name);
 
-        let response: Response;
-        try {
-          response = await fetch(`${API_URL}/inspect`, {
-            method: 'POST',
-            body: formData,
-          });
-        } catch {
-          response = await fetch('/inspect', {
-            method: 'POST',
-            body: formData,
-          });
-        }
+        const response = await fetch(`${API_URL}/inspect`, {
+          method: 'POST',
+          body: formData,
+        });
 
         // Safely parse response body to avoid 'Unexpected end of JSON input'
         const rawText = await response.text();
@@ -181,20 +173,11 @@ export function App() {
     setErrorMsg('');
 
     try {
-      let response: Response;
-      try {
-        response = await fetch(`${API_URL}/inspect-url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        });
-      } catch {
-        response = await fetch('/inspect-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        });
-      }
+      const response = await fetch(`${API_URL}/inspect-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
 
       const rawText = await response.text();
       let data: Record<string, unknown> = {};

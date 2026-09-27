@@ -6,7 +6,7 @@ interface ErrorBannerProps {
   onReset: () => void;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://legalcheck-backend.onrender.com';
 
 export const ErrorBanner: React.FC<ErrorBannerProps> = ({ message, onRetry, onReset }) => {
   return (
