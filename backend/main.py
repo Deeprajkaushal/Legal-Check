@@ -57,33 +57,33 @@ def health_check():
 @app.post("/inspect")
 async def inspect_package(
     request: Request,
-    image: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File([]),
     images: List[UploadFile] = File([]),
-    files: List[UploadFile] = File([])
+    image: Optional[UploadFile] = File(None)
 ):
     total_start_time = time.time()
     uploaded_files: List[UploadFile] = []
 
-    # Priority 1: Check 'images'
-    if images:
-        if isinstance(images, list):
-            uploaded_files.extend([f for f in images if isinstance(f, UploadFile) and f.filename])
-        elif isinstance(images, UploadFile) and images.filename:
-            uploaded_files.append(images)
-
-    # Priority 2: Check 'files'
-    if not uploaded_files and files:
+    # Canonical Field: 'files'
+    if files:
         if isinstance(files, list):
             uploaded_files.extend([f for f in files if isinstance(f, UploadFile) and f.filename])
         elif isinstance(files, UploadFile) and files.filename:
             uploaded_files.append(files)
 
-    # Priority 3: Check 'image'
+    # Secondary Field: 'images'
+    if not uploaded_files and images:
+        if isinstance(images, list):
+            uploaded_files.extend([f for f in images if isinstance(f, UploadFile) and f.filename])
+        elif isinstance(images, UploadFile) and images.filename:
+            uploaded_files.append(images)
+
+    # Secondary Field: 'image'
     if not uploaded_files and image:
         if isinstance(image, UploadFile) and image.filename:
             uploaded_files.append(image)
 
-    # Priority 4: Fallback to reading raw request.form() for any UploadFile regardless of field key
+    # Fallback to reading raw request.form() for any UploadFile regardless of field key name
     if not uploaded_files:
         try:
             form = await request.form()
@@ -94,6 +94,8 @@ async def inspect_package(
             logger.warning(f"Could not parse request.form(): {form_err}")
 
     logger.info(f"[INSPECT] Received {len(uploaded_files)} file(s): {[f.filename for f in uploaded_files]}")
+    for f in uploaded_files:
+        logger.info(f"[INSPECT] file={f.filename} type={f.content_type} size={getattr(f, 'size', 'unknown')}")
 
     if not uploaded_files:
         raise HTTPException(

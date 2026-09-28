@@ -106,10 +106,14 @@ export function App() {
               type: (rawFile as any)?.type || 'image/jpeg',
             });
         
-        formData.append('images', imageFile, imageFile.name);
+        formData.append('files', imageFile, imageFile.name || `package-${i + 1}.jpg`);
       });
 
-      console.log(`[INSPECT UPLOAD] Prepared FormData with ${images.length} image file(s).`);
+      console.log("[UPLOAD] files state:", images);
+      console.log("[UPLOAD] file count:", images?.length);
+      for (const [key, value] of formData.entries()) {
+        console.log("[UPLOAD] FormData:", key, value);
+      }
 
       const response = await fetch(`${API_URL}/inspect`, {
         method: 'POST',
