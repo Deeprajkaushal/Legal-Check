@@ -3,18 +3,21 @@ import os
 import re
 from PIL import Image
 
-# Initialize RapidOCR engine lazily
 _rapid_ocr_engine = None
+_rapid_ocr_failed = False
 
 
 def _get_ocr_engine():
-    global _rapid_ocr_engine
+    global _rapid_ocr_engine, _rapid_ocr_failed
+    if _rapid_ocr_failed:
+        return None
     if _rapid_ocr_engine is None:
         try:
             from rapidocr_onnxruntime import RapidOCR
             _rapid_ocr_engine = RapidOCR()
-        except ImportError:
-            _rapid_ocr_engine = False
+        except Exception as err:
+            _rapid_ocr_failed = True
+            _rapid_ocr_engine = None
     return _rapid_ocr_engine
 
 
@@ -24,24 +27,7 @@ def extract_ocr_from_bytes(
     filename: str = ""
 ) -> dict:
     """
-    Run local OCR on image bytes.
-
-    Returns:
-        {
-          "image_index": 0,
-          "filename": "front.jpg",
-          "items": [
-            {
-              "image_index": 0,
-              "text": "...",
-              "confidence": 0.92,
-              "bounding_box": [x1, y1, x2, y2]
-            }
-          ],
-          "combined_text": "...",
-          "avg_confidence": 0.92,
-          "total_words": 45
-        }
+    Run local OCR on image bytes with bulletproof exception handling.
     """
     if not image_bytes:
         return {
@@ -55,20 +41,21 @@ def extract_ocr_from_bytes(
         }
 
     ocr_items = []
-    engine = _get_ocr_engine()
 
-    # Try RapidOCR first
-    if engine:
-        try:
-            # RapidOCR can accept image bytes directly or numpy array or PIL image
+    # 1. Try RapidOCR
+    try:
+        engine = _get_ocr_engine()
+        if engine:
             res, _ = engine(image_bytes)
             if res:
-                for box, text, score in res:
-                    text_str = str(text).strip()
+                for item in res:
+                    if not item or len(item) < 3:
+                        continue
+                    box, text, score = item[0], item[1], item[2]
+                    text_str = str(text).strip() if text else ""
                     if not text_str:
                         continue
 
-                    # box is polygon points [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
                     try:
                         xs = [p[0] for p in box]
                         ys = [p[1] for p in box]
@@ -84,15 +71,14 @@ def extract_ocr_from_bytes(
                         "confidence": conf,
                         "bounding_box": bbox
                     })
-        except Exception as err:
-            ocr_items = []
+    except Exception as err:
+        ocr_items = []
 
-    # Fallback to Pytesseract if RapidOCR failed or produced no results
+    # 2. Fallback to Pytesseract if RapidOCR was not used or yielded no results
     if not ocr_items:
         try:
             import pytesseract
 
-            # Set tesseract path on Windows if default executable exists
             tess_win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
             if os.path.exists(tess_win):
                 pytesseract.pytesseract.tesseract_cmd = tess_win
@@ -119,7 +105,7 @@ def extract_ocr_from_bytes(
         except Exception:
             pass
 
-    # Deduplicate consecutive identical text lines per image
+    # Deduplicate lines while keeping order
     seen_lines = set()
     cleaned_lines = []
     for item in ocr_items:
@@ -148,11 +134,6 @@ def extract_ocr_from_bytes(
 def combine_multi_image_ocr(ocr_results_list: list[dict]) -> dict:
     """
     Combine OCR text from multiple package images into a single structured prompt input.
-    Format:
-    [Image 1: front.jpg]
-    ...
-    [Image 2: back.jpg]
-    ...
     """
     formatted_parts = []
     all_items = []
