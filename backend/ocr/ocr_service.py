@@ -1,24 +1,23 @@
 import io
 import os
 import re
+import concurrent.futures
 from PIL import Image
 
-_rapid_ocr_engine = None
-_rapid_ocr_failed = False
 
-
-def _get_ocr_engine():
-    global _rapid_ocr_engine, _rapid_ocr_failed
-    if _rapid_ocr_failed:
+def _run_rapid_ocr_in_process(image_bytes: bytes):
+    """
+    Isolated child process target for RapidOCR.
+    If ONNX runtime segfaults or fails on Linux cloud hosts,
+    only this child process terminates without crashing main web server.
+    """
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        engine = RapidOCR()
+        res, _ = engine(image_bytes)
+        return res
+    except Exception:
         return None
-    if _rapid_ocr_engine is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-            _rapid_ocr_engine = RapidOCR()
-        except Exception as err:
-            _rapid_ocr_failed = True
-            _rapid_ocr_engine = None
-    return _rapid_ocr_engine
 
 
 def extract_ocr_from_bytes(
@@ -27,7 +26,7 @@ def extract_ocr_from_bytes(
     filename: str = ""
 ) -> dict:
     """
-    Run local OCR on image bytes with bulletproof exception handling.
+    Run local OCR on image bytes with process-isolated fallback.
     """
     if not image_bytes:
         return {
@@ -42,11 +41,11 @@ def extract_ocr_from_bytes(
 
     ocr_items = []
 
-    # 1. Try RapidOCR
+    # 1. Try RapidOCR in an isolated process to protect main server from C++ segfaults
     try:
-        engine = _get_ocr_engine()
-        if engine:
-            res, _ = engine(image_bytes)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_rapid_ocr_in_process, image_bytes)
+            res = future.result(timeout=6.0)
             if res:
                 for item in res:
                     if not item or len(item) < 3:
@@ -71,7 +70,7 @@ def extract_ocr_from_bytes(
                         "confidence": conf,
                         "bounding_box": bbox
                     })
-    except Exception as err:
+    except Exception:
         ocr_items = []
 
     # 2. Fallback to Pytesseract if RapidOCR was not used or yielded no results
