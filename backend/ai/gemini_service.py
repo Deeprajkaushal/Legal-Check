@@ -15,9 +15,10 @@ logger = logging.getLogger("legalcheck.ai")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 MODEL_FALLBACKS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+    "gemini-flash-lite-latest",
 ]
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
