@@ -3,6 +3,23 @@ import os
 import re
 from PIL import Image
 
+_rapid_ocr_engine = None
+_rapid_ocr_failed = False
+
+
+def _get_ocr_engine():
+    global _rapid_ocr_engine, _rapid_ocr_failed
+    if _rapid_ocr_failed:
+        return None
+    if _rapid_ocr_engine is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _rapid_ocr_engine = RapidOCR()
+        except Exception:
+            _rapid_ocr_failed = True
+            _rapid_ocr_engine = None
+    return _rapid_ocr_engine
+
 
 def extract_ocr_from_bytes(
     image_bytes: bytes,
@@ -10,8 +27,8 @@ def extract_ocr_from_bytes(
     filename: str = ""
 ) -> dict:
     """
-    Run local OCR on preprocessed image bytes.
-    Uses Pytesseract / PIL extraction with fail-safe text handling.
+    Run local OCR on preprocessed package image bytes.
+    Uses RapidOCR (ONNX Runtime) as primary engine, with Pytesseract fallback.
     """
     if not image_bytes:
         return {
@@ -25,37 +42,70 @@ def extract_ocr_from_bytes(
 
     ocr_items = []
 
-    # 1. Try Pytesseract (Tesseract OCR engine)
-    try:
-        import pytesseract
+    # 1. Try RapidOCR
+    engine = _get_ocr_engine()
+    if engine:
+        try:
+            res, _ = engine(image_bytes)
+            if res:
+                for item in res:
+                    if not item or len(item) < 3:
+                        continue
+                    box, text, score = item[0], item[1], item[2]
+                    text_str = str(text).strip() if text else ""
+                    if not text_str:
+                        continue
 
-        tess_win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        if os.path.exists(tess_win):
-            pytesseract.pytesseract.tesseract_cmd = tess_win
+                    try:
+                        xs = [p[0] for p in box]
+                        ys = [p[1] for p in box]
+                        bbox = [round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))]
+                    except Exception:
+                        bbox = [0, 0, 0, 0]
 
-        pil_img = Image.open(io.BytesIO(image_bytes))
-        data = pytesseract.image_to_data(pil_img, output_type=pytesseract.Output.DICT)
+                    conf = round(float(score), 4) if score is not None else 0.0
 
-        n_boxes = len(data.get("text", []))
-        for i in range(n_boxes):
-            t_str = str(data["text"][i]).strip()
-            conf_val = data["conf"][i]
-            if t_str and conf_val != -1 and conf_val != "-1":
-                c_float = round(float(conf_val) / 100.0, 4)
-                x = data["left"][i]
-                y = data["top"][i]
-                w = data["width"][i]
-                h = data["height"][i]
-                ocr_items.append({
-                    "image_index": image_index,
-                    "text": t_str,
-                    "confidence": c_float,
-                    "bounding_box": [x, y, x + w, y + h]
-                })
-    except Exception:
-        ocr_items = []
+                    ocr_items.append({
+                        "image_index": image_index,
+                        "text": text_str,
+                        "confidence": conf,
+                        "bounding_box": bbox
+                    })
+        except Exception:
+            ocr_items = []
 
-    # Format text lines and deduplicate
+    # 2. Try Pytesseract if RapidOCR yielded no results
+    if not ocr_items:
+        try:
+            import pytesseract
+
+            tess_win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.exists(tess_win):
+                pytesseract.pytesseract.tesseract_cmd = tess_win
+
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            data = pytesseract.image_to_data(pil_img, output_type=pytesseract.Output.DICT)
+
+            n_boxes = len(data.get("text", []))
+            for i in range(n_boxes):
+                t_str = str(data["text"][i]).strip()
+                conf_val = data["conf"][i]
+                if t_str and conf_val != -1 and conf_val != "-1":
+                    c_float = round(float(conf_val) / 100.0, 4)
+                    x = data["left"][i]
+                    y = data["top"][i]
+                    w = data["width"][i]
+                    h = data["height"][i]
+                    ocr_items.append({
+                        "image_index": image_index,
+                        "text": t_str,
+                        "confidence": c_float,
+                        "bounding_box": [x, y, x + w, y + h]
+                    })
+        except Exception:
+            pass
+
+    # Deduplicate lines while preserving sequence
     seen_lines = set()
     cleaned_lines = []
     for item in ocr_items:
