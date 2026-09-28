@@ -8,13 +8,14 @@ interface ResultsDashboardProps {
 
 export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNewInspection }) => {
   const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>({});
-  const [showOcrEvidence, setShowOcrEvidence] = useState(false);
+  const [showOcrDebug, setShowOcrDebug] = useState<boolean>(true);
+  const [showRawText, setShowRawText] = useState<boolean>(false);
 
   const toggleRuleExpand = (ruleId: string) => {
     setExpandedRules((prev) => ({ ...prev, [ruleId]: !prev[ruleId] }));
   };
 
-  const { compliance, product, declarations, verification, inspection_id, generated_at, file, context, shelf_life } = result;
+  const { compliance, product, declarations, verification, inspection_id, generated_at, file, context, shelf_life, ocr_debug } = result;
 
   const formatFieldName = (field: string) => {
     if (field === 'best_before' || field === 'shelf_life') return 'Best Before / Use By / Expiry';
@@ -89,7 +90,6 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
     document.title = originalTitle;
   };
 
-  // Determine merged shelf life value
   const shelfLifeDisplayValue =
     shelf_life?.raw_text ||
     shelf_life?.value ||
@@ -98,11 +98,9 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
     declarations.expiry ||
     null;
 
-  // Package Type formatted text
   const packageTypeRaw = product.package_type || context.package_type || declarations.package_type || 'single_package';
   const packageTypeLabel = String(packageTypeRaw).replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase());
 
-  // Determine status for Unit Sale Price in Additional Declarations
   const getUnitSalePriceStatus = () => {
     if (['combination_package', 'group_package', 'multi_piece_package'].includes(packageTypeRaw)) {
       return { status: 'Not required', badgeClass: 'pill-neutral', note: 'Rule 6(11) 2023 Amendment Exemption' };
@@ -113,7 +111,6 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
     return { status: 'Requires verification', badgeClass: 'pill-warning', note: 'Rule 6(11) Contextual Check' };
   };
 
-  // Determine status for Country of Origin in Additional Declarations
   const getCountryOfOriginStatus = () => {
     if (declarations.country_of_origin) {
       return { status: 'Detected', badgeClass: 'pill-success', note: 'Rule 6(1)(aa) Compliant' };
@@ -130,7 +127,6 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
   const uspStatus = getUnitSalePriceStatus();
   const cooStatus = getCountryOfOriginStatus();
 
-  // Filter Primary Declarations (Exclude unit_sale_price, country_of_origin, use_by, expiry, package_type, etc.)
   const primaryFieldsOrder = [
     'product_name',
     'manufacturer',
@@ -390,58 +386,134 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
         </div>
       </div>
 
-      {/* OCR Status & Debug View */}
-      {result.ocr_debug && (
-        <section className="results-section print-hide">
-          <div className="ocr-debug-card">
-            <div className="ocr-debug-header">
-              <div className="ocr-status-badges">
-                <span className="ocr-status-badge success">
-                  ✓ {result.ocr_debug.images_processed} Image{result.ocr_debug.images_processed > 1 ? 's' : ''} Processed (OpenCV)
-                </span>
-                <span className="ocr-status-badge success">
-                  ✓ OCR Completed ({result.ocr_debug.total_words} words, {Math.round(result.ocr_debug.average_confidence * 100)}% conf)
-                </span>
-                <span className="ocr-status-badge text-only">
-                  ✓ Gemini Text Interpretation Completed (TEXT ONLY)
+      {/* OCR Status & Debug Section (Requirement 9 & 18) */}
+      {ocr_debug && (
+        <section className="results-section print-hide" style={{ background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', padding: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowOcrDebug(!showOcrDebug)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontSize: '1.2rem' }}>⚡</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, color: '#0f172a' }}>
+                  OCR Pipeline Status & Evidence
+                </h3>
+                <span style={{ fontSize: '0.825rem', color: '#64748b' }}>
+                  OpenCV Preprocessing → RapidOCR → Gemini Text-Only
                 </span>
               </div>
-
-              <button
-                type="button"
-                className="btn-toggle-ocr-evidence"
-                onClick={() => setShowOcrEvidence(!showOcrEvidence)}
-              >
-                <span>{showOcrEvidence ? 'Hide OCR Evidence' : 'Show OCR Evidence'}</span>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  style={{ transform: showOcrEvidence ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
             </div>
-
-            {showOcrEvidence && (
-              <div className="ocr-evidence-body">
-                <h4 className="ocr-evidence-title">Extracted OCR Text Evidence</h4>
-                {result.ocr_debug.evidence?.map((item) => (
-                  <div key={item.image_index} className="ocr-evidence-item">
-                    <div className="ocr-item-meta">
-                      <strong>Image {item.image_index + 1}: {item.filename}</strong>
-                      <span>Confidence: {Math.round(item.confidence * 100)}% · {item.words} words</span>
-                    </div>
-                    <pre className="ocr-text-box">{item.text || '(No text detected in this image)'}</pre>
-                  </div>
-                ))}
-              </div>
-            )}
+            <span style={{ fontSize: '0.85rem', color: '#2563eb', fontWeight: 500 }}>
+              {showOcrDebug ? 'Hide Details ▲' : 'Show Details ▼'}
+            </span>
           </div>
+
+          {showOcrDebug && (
+            <div style={{ marginTop: '1rem', borderTop: '1px dashed #cbd5e1', paddingTop: '1rem' }}>
+              {/* Status checklist */}
+              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                <span style={{ color: '#059669', fontWeight: 500 }}>
+                  ✓ {ocr_debug.images_processed || 1} Image(s) processed
+                </span>
+                <span style={{ color: '#059669', fontWeight: 500 }}>
+                  ✓ Local OCR completed ({ocr_debug.ocr_status})
+                </span>
+                <span style={{ color: '#059669', fontWeight: 500 }}>
+                  ✓ Gemini Text-Only interpretation completed
+                </span>
+                {ocr_debug.timing?.total_ms && (
+                  <span style={{ color: '#475569', marginLeft: 'auto', fontSize: '0.825rem' }}>
+                    Total Time: {(ocr_debug.timing.total_ms / 1000).toFixed(2)}s 
+                    (OCR: {((ocr_debug.timing.ocr_ms || 0) / 1000).toFixed(2)}s | 
+                     AI: {((ocr_debug.timing.gemini_ms || 0) / 1000).toFixed(2)}s)
+                  </span>
+                )}
+              </div>
+
+              {/* OCR Evidence Table */}
+              {ocr_debug.ocr_evidence && ocr_debug.ocr_evidence.length > 0 ? (
+                <div>
+                  <h4 style={{ margin: '0.75rem 0 0.5rem', fontSize: '0.9rem', color: '#334155' }}>
+                    OCR Field Evidence Mapping
+                  </h4>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead>
+                        <tr style={{ background: '#f1f5f9', textAlign: 'left', color: '#475569' }}>
+                          <th style={{ padding: '6px 10px', borderBottom: '1px solid #cbd5e1' }}>Field</th>
+                          <th style={{ padding: '6px 10px', borderBottom: '1px solid #cbd5e1' }}>Detected Value</th>
+                          <th style={{ padding: '6px 10px', borderBottom: '1px solid #cbd5e1' }}>Source Image</th>
+                          <th style={{ padding: '6px 10px', borderBottom: '1px solid #cbd5e1' }}>OCR Text Snippet</th>
+                          <th style={{ padding: '6px 10px', borderBottom: '1px solid #cbd5e1' }}>Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ocr_debug.ocr_evidence.map((ev, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                            <td style={{ padding: '6px 10px', fontWeight: 600, color: '#1e293b' }}>{ev.label}</td>
+                            <td style={{ padding: '6px 10px', color: '#0f172a' }}>{ev.detected_value}</td>
+                            <td style={{ padding: '6px 10px', color: '#64748b' }}>{ev.source_image}</td>
+                            <td style={{ padding: '6px 10px', fontFamily: 'monospace', color: '#334155', fontSize: '0.8rem' }}>
+                              "{ev.ocr_snippet}"
+                            </td>
+                            <td style={{ padding: '6px 10px' }}>
+                              <span style={{
+                                background: ev.confidence > 0.85 ? '#d1fae5' : '#fef3c7',
+                                color: ev.confidence > 0.85 ? '#065f46' : '#92400e',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '0.75rem',
+                                fontWeight: 600
+                              }}>
+                                {Math.round(ev.confidence * 100)}%
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <p style={{ fontSize: '0.85rem', color: '#64748b' }}>Evidence details unavailable.</p>
+              )}
+
+              {/* Raw OCR Text Expandable Toggle */}
+              {ocr_debug.combined_ocr_text && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowRawText(!showRawText)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#2563eb',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      padding: 0,
+                      textDecoration: 'underline'
+                    }}
+                  >
+                    {showRawText ? 'Hide Raw Extracted OCR Text' : 'View Raw Extracted OCR Text'}
+                  </button>
+
+                  {showRawText && (
+                    <pre style={{
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      background: '#1e293b',
+                      color: '#f8fafc',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      maxHeight: '200px',
+                      overflowY: 'auto',
+                      whiteSpace: 'pre-wrap'
+                    }}>
+                      {ocr_debug.combined_ocr_text}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 

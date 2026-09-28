@@ -98,16 +98,12 @@ export function App() {
 
     try {
       const formData = new FormData();
-      if (images.length === 1) {
-        const img = images[0];
-        const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || 'package.jpg', { type: 'image/jpeg' });
-        formData.append('image', imageFile, imageFile.name);
-      } else {
-        images.forEach((img, i) => {
-          const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
-          formData.append('images', imageFile, imageFile.name);
-        });
-      }
+      images.forEach((img, i) => {
+        const imageFile = img.file.type
+          ? img.file
+          : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
+        formData.append('images', imageFile, imageFile.name);
+      });
 
       const response = await fetch(`${API_URL}/inspect`, {
         method: 'POST',
@@ -125,15 +121,18 @@ export function App() {
       }
 
       if (!response.ok) {
-        let detail = typeof data.detail === 'string' ? data.detail : (data.message as string) || `Server returned HTTP ${response.status}.`;
+        let detail =
+          typeof data.detail === 'string'
+            ? data.detail
+            : (data.message as string) || `Server returned HTTP ${response.status}.`;
         if (detail.includes('429') || detail.includes('RESOURCE_EXHAUSTED')) {
           detail = 'Gemini AI rate limit temporarily reached. Please wait 15-30 seconds and try again.';
         }
         throw new Error(detail);
       }
 
-      const inspectRes = data as unknown as InspectionResponse;
-      setResult(inspectRes);
+      const combinedResult = data as unknown as InspectionResponse;
+      setResult(combinedResult);
       setAppState('success');
 
       // Create thumbnail for history
@@ -145,7 +144,7 @@ export function App() {
       }
 
       // Save to localStorage history (max 5 items)
-      const updatedHistory = saveToHistory(inspectRes, thumbUrl);
+      const updatedHistory = saveToHistory(combinedResult, thumbUrl);
       setHistoryItems(updatedHistory);
     } catch (err) {
       console.error('Inspection API Error:', err);
@@ -185,7 +184,10 @@ export function App() {
       }
 
       if (!response.ok) {
-        let detail = typeof data.detail === 'string' ? data.detail : (data.message as string) || `Server returned HTTP ${response.status}.`;
+        let detail =
+          typeof data.detail === 'string'
+            ? data.detail
+            : (data.message as string) || `Server returned HTTP ${response.status}.`;
         if (detail.includes('429') || detail.includes('RESOURCE_EXHAUSTED')) {
           detail = 'Gemini AI rate limit temporarily reached. Please wait 15-30 seconds and try again.';
         }

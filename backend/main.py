@@ -1,13 +1,18 @@
+import time
+import logging
+from typing import List, Optional, Union
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from ocr.ocr_service import perform_ocr_multiple
 from ai.gemini_service import analyze_ocr_text, analyze_web_content
-from ocr.preprocessing import preprocess_image
-from ocr.ocr_service import extract_ocr_from_bytes, combine_multi_image_ocr
 from rules_engine.compliance import check_compliance
 from reporting.report import build_inspection_report
 from web.web_service import fetch_and_extract_web_content
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("legalcheck.main")
 
 
 class URLInspectRequest(BaseModel):
@@ -18,7 +23,7 @@ app = FastAPI(
     title="LegalCheck API",
     description=(
         "AI-assisted Legal Metrology "
-        "compliance inspection system"
+        "compliance inspection system using OCR + Gemini Text-Only"
     ),
     version="0.3.0"
 )
@@ -30,6 +35,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://legal-check-nu.vercel.app",
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -43,126 +49,154 @@ def health_check():
         "status": "ok",
         "project": "LegalCheck",
         "problem_id": "SIH26034",
-        "pipeline": "OpenCV -> Local OCR -> Gemini Text-Only -> Rules Engine",
-        "version": "0.3.0"
+        "version": "0.3.0",
+        "ocr_pipeline": "OpenCV + RapidOCR + Gemini Text-Only"
     }
 
 
 @app.post("/inspect")
 async def inspect_package(
-    image: UploadFile = File(None),
-    images: list[UploadFile] = File(None)
+    image: Optional[UploadFile] = File(None),
+    images: Optional[Union[List[UploadFile], UploadFile]] = File(None)
 ):
-    """
-    Inspect one or multiple package images using OpenCV preprocessing,
-    local OCR extraction, combined text-only Gemini interpretation,
-    and deterministic Legal Metrology compliance rules.
-    """
-    upload_list = []
-    if images and len(images) > 0:
-        upload_list = images
-    elif image is not None:
-        upload_list = [image]
+    total_start_time = time.time()
+    uploaded_files: List[UploadFile] = []
 
-    if not upload_list:
+    if isinstance(images, list):
+        for item in images:
+            if isinstance(item, UploadFile):
+                uploaded_files.append(item)
+    elif isinstance(images, UploadFile):
+        uploaded_files.append(images)
+        
+    if isinstance(image, UploadFile) and image not in uploaded_files:
+        uploaded_files.append(image)
+
+    if not uploaded_files:
         raise HTTPException(
             status_code=400,
-            detail="Please upload at least one package image."
+            detail="Please upload at least one image file."
         )
 
-    processed_ocr_results = []
-    filenames = []
+    # 1. Read files into bytes
+    images_bytes_list = []
+    file_metadata = []
 
-    # 1. OpenCV Preprocessing & Local OCR per image
-    for idx, img in enumerate(upload_list):
-        if not img.content_type or not img.content_type.startswith("image/"):
+    for f in uploaded_files:
+        if f.content_type and not f.content_type.startswith("image/"):
             raise HTTPException(
                 status_code=400,
-                detail=f"File {img.filename or idx + 1} is not a valid image."
+                detail=f"File {f.filename} is not a valid image."
             )
-
-        raw_bytes = await img.read()
-        if not raw_bytes:
+        content = await f.read()
+        if not content:
             raise HTTPException(
                 status_code=400,
-                detail=f"Uploaded image {img.filename or idx + 1} is empty."
+                detail=f"Uploaded file {f.filename} is empty."
             )
+        images_bytes_list.append(content)
+        file_metadata.append({
+            "filename": f.filename or "package.jpg",
+            "content_type": f.content_type or "image/jpeg",
+            "size_bytes": len(content)
+        })
 
-        fn = img.filename or f"package_photo_{idx + 1}.jpg"
-        filenames.append(fn)
-
-        # OpenCV Preprocessing
-        prep_bytes, prep_meta = preprocess_image(raw_bytes)
-
-        # Local OCR Extraction
-        ocr_res = extract_ocr_from_bytes(
-            image_bytes=prep_bytes,
-            image_index=idx,
-            filename=fn
-        )
-        processed_ocr_results.append(ocr_res)
-
-    # 2. Combine OCR text across all uploaded package images
-    combined_ocr = combine_multi_image_ocr(processed_ocr_results)
-    combined_text = combined_ocr.get("combined_text", "").strip()
-
-    if not combined_text:
-        # Fallback text if OCR found no readable characters
-        combined_text = f"Package images provided ({', '.join(filenames)}), but no legible text was extracted by local OCR."
-
-    # 3. Text-Only AI Extraction via Gemini
+    # 2. OpenCV Preprocessing & Local OCR (Concurrent)
+    ocr_start = time.time()
     try:
-        extracted_data = analyze_ocr_text(combined_ocr_text=combined_text)
+        ocr_result = perform_ocr_multiple(images_bytes_list)
     except Exception as error:
+        logger.error(f"OCR processing failed: {error}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Image preprocessing or OCR failed: {str(error)}"
+        )
+    ocr_duration = time.time() - ocr_start
+
+    combined_ocr_text = ocr_result.get("combined_text", "")
+    per_image_ocr = ocr_result.get("per_image_results", [])
+
+    # 3. Gemini TEXT-ONLY Extraction (NO images sent!)
+    gemini_start = time.time()
+    try:
+        extracted_data = analyze_ocr_text(
+            ocr_combined_text=combined_ocr_text,
+            per_image_ocr=per_image_ocr
+        )
+    except Exception as error:
+        logger.error(f"Gemini text interpretation failed: {error}")
         raise HTTPException(
             status_code=503,
-            detail=f"AI OCR text extraction failed: {str(error)}"
+            detail=f"AI text extraction failed: {str(error)}"
         )
+    gemini_duration = time.time() - gemini_start
 
-    # 4. Deterministic compliance analysis
+    # 4. Classification & Deterministic Compliance Engine
+    compliance_start = time.time()
     source_info = {
         "type": "file",
-        "filenames": filenames,
-        "image_count": len(filenames)
+        "file_count": len(uploaded_files),
+        "files": file_metadata
     }
-    compliance_result = check_compliance(
-        extracted_data,
-        inspection_type="package",
-        source=source_info
-    )
+    compliance_result = check_compliance(extracted_data, source=source_info)
+    compliance_duration = time.time() - compliance_start
 
-    # 5. Build explainable report
+    # 5. Build Explainable Report
+    report_start = time.time()
     report = build_inspection_report(
         extracted_data=extracted_data,
         compliance_result=compliance_result,
         inspection_type="package",
         source=source_info
     )
+    report_duration = time.time() - report_start
 
-    report["file"] = {
-        "filename": filenames[0] if filenames else "package.jpg",
-        "filenames": filenames,
-        "count": len(filenames)
+    total_duration = time.time() - total_start_time
+
+    # Construct timing & debug metadata
+    timing_breakdown = {
+        "upload_ms": int((ocr_start - total_start_time) * 1000),
+        "ocr_ms": int(ocr_duration * 1000),
+        "gemini_ms": int(gemini_duration * 1000),
+        "compliance_ms": int(compliance_duration * 1000),
+        "report_ms": int(report_duration * 1000),
+        "total_ms": int(total_duration * 1000)
     }
 
-    # 6. Add development/debug OCR evidence metadata
+    # Log step timing as specified in requirements
+    logger.info(
+        f"[INSPECT TIMING] "
+        f"Images: {len(uploaded_files)} | "
+        f"OCR: {ocr_duration:.2f}s | "
+        f"Gemini (TEXT-ONLY): {gemini_duration:.2f}s | "
+        f"Compliance: {compliance_duration:.3f}s | "
+        f"Report: {report_duration:.3f}s | "
+        f"Total: {total_duration:.2f}s"
+    )
+
+    per_image_previews = []
+    for res in per_image_ocr:
+        per_image_previews.append({
+            "image_index": res.get("image_index"),
+            "line_count": res.get("line_count"),
+            "avg_confidence": res.get("confidence"),
+            "text_preview": res.get("text", "")[:150] + ("..." if len(res.get("text", "")) > 150 else "")
+        })
+
     report["ocr_debug"] = {
-        "images_processed": len(upload_list),
-        "ocr_completed": True,
+        "images_processed": len(uploaded_files),
+        "ocr_status": "completed",
         "gemini_text_only": True,
-        "average_confidence": combined_ocr.get("average_confidence", 0.0),
-        "total_words": combined_ocr.get("total_words", 0),
-        "combined_text": combined_text,
-        "evidence": [
-            {
-                "image_index": res.get("image_index", i),
-                "filename": res.get("filename", f"image_{i+1}.jpg"),
-                "confidence": res.get("avg_confidence", 0.0),
-                "words": res.get("total_words", 0),
-                "text": res.get("combined_text", "")
-            }
-            for i, res in enumerate(processed_ocr_results)
-        ]
+        "combined_ocr_text": combined_ocr_text,
+        "per_image_ocr": per_image_previews,
+        "ocr_evidence": extracted_data.get("ocr_evidence", []),
+        "timing": timing_breakdown
+    }
+
+    report["file"] = file_metadata[0] if len(file_metadata) == 1 else {
+        "filename": f"{len(file_metadata)} package images",
+        "content_type": "image/*",
+        "files": file_metadata
     }
 
     report["project"] = "LegalCheck"
@@ -173,6 +207,7 @@ async def inspect_package(
 
 @app.post("/inspect-url")
 async def inspect_url(payload: URLInspectRequest):
+    total_start_time = time.time()
     url = payload.url.strip() if payload and payload.url else ""
     if not url:
         raise HTTPException(status_code=400, detail="Please provide a valid product URL.")
@@ -254,6 +289,15 @@ async def inspect_url(payload: URLInspectRequest):
         inspection_type="digital",
         source=source
     )
+
+    report["ocr_debug"] = {
+        "images_processed": 0,
+        "ocr_status": "digital_web_extraction",
+        "gemini_text_only": True,
+        "timing": {
+            "total_ms": int((time.time() - total_start_time) * 1000)
+        }
+    }
 
     report["project"] = "LegalCheck"
     report["problem_id"] = "SIH26034"

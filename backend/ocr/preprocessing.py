@@ -2,69 +2,58 @@ import cv2
 import numpy as np
 
 
-def preprocess_image(image_bytes: bytes) -> tuple[bytes, dict]:
+def preprocess_image(image_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
     """
-    Preprocess uploaded package image before passing to OCR.
-    Lightweight, RAM-efficient OpenCV pipeline for cloud deployment.
+    Preprocess image for OCR using OpenCV.
+    Enhances contrast, reduces noise, sharpens text while preserving legibility.
+    
+    Returns:
+        (processed_bgr, original_bgr)
     """
     if not image_bytes:
-        return image_bytes, {"processed": False, "reason": "empty_bytes"}
+        raise ValueError("Image byte buffer is empty.")
 
-    try:
-        # 1. Decode bytes into OpenCV image matrix
-        np_arr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img_orig = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        if img is None:
-            return image_bytes, {"processed": False, "reason": "invalid_image_format"}
+    if img_orig is None:
+        raise ValueError("Failed to decode image using OpenCV.")
 
-        orig_h, orig_w = img.shape[:2]
+    h, w = img_orig.shape[:2]
 
-        # 2. Downscale to max 1500px for high performance and low memory
-        target_img = img
-        scale_factor = 1.0
+    # Target dimensions: Max side 2048px, Min side 600px
+    max_dim = 2048
+    min_dim = 600
 
-        if max(orig_h, orig_w) > 1500:
-            scale_factor = 1500.0 / max(orig_h, orig_w)
-            new_w = int(orig_w * scale_factor)
-            new_h = int(orig_h * scale_factor)
-            target_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    scale = 1.0
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+    elif min(h, w) < min_dim:
+        scale = min_dim / min(h, w)
 
-        # 3. Grayscale conversion
-        gray = cv2.cvtColor(target_img, cv2.COLOR_BGR2GRAY)
+    if scale != 1.0:
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+        img_resized = cv2.resize(img_orig, (new_w, new_h), interpolation=interpolation)
+    else:
+        img_resized = img_orig.copy()
 
-        # 4. Contrast enhancement via CLAHE
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        contrast_enhanced = clahe.apply(gray)
+    # 1. Grayscale
+    gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
 
-        # 5. Fast Gaussian blur for noise suppression (RAM friendly)
-        denoised = cv2.GaussianBlur(contrast_enhanced, (3, 3), 0)
+    # 2. CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
 
-        # 6. Sharpening filter
-        kernel = np.array([
-            [0, -0.5, 0],
-            [-0.5, 3.0, -0.5],
-            [0, -0.5, 0]
-        ], dtype=np.float32)
-        sharpened = cv2.filter2D(denoised, -1, kernel)
+    # 3. Mild Denoising
+    denoised = cv2.fastNlMeansDenoising(enhanced, None, h=5, templateWindowSize=7, searchWindowSize=21)
 
-        # Encode back to PNG bytes
-        success, encoded_img = cv2.imencode('.png', sharpened)
-        if not success:
-            return image_bytes, {"processed": False, "reason": "encode_failed"}
+    # 4. Sharpening filter
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+    sharpened = cv2.filter2D(denoised, -1, kernel)
 
-        processed_bytes = encoded_img.tobytes()
+    # Convert back to 3-channel BGR image as expected by OCR engines
+    processed_bgr = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
-        metadata = {
-            "processed": True,
-            "original_dimensions": [orig_w, orig_h],
-            "processed_dimensions": [sharpened.shape[1], sharpened.shape[0]],
-            "scale_factor": round(scale_factor, 2),
-            "steps": ["resize", "grayscale", "clahe_contrast", "gaussian_blur", "sharpening"]
-        }
-
-        return processed_bytes, metadata
-
-    except Exception as err:
-        # Fallback to original bytes if OpenCV processing encounters any error
-        return image_bytes, {"processed": False, "error": str(err)}
+    return processed_bgr, img_orig

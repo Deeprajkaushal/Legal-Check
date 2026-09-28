@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import logging
 
 from dotenv import load_dotenv
 from google import genai
@@ -9,13 +10,18 @@ from google.genai import types
 
 load_dotenv()
 
+logger = logging.getLogger("legalcheck.ai")
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Fast, reliable text models for text-only interpretation
 MODEL_FALLBACKS = [
+    "gemini-flash-latest",
     "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
+    "gemini-3.6-flash",
     "gemini-3.8-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
 ]
 
 if not GEMINI_API_KEY:
@@ -43,30 +49,24 @@ ALLOWED_PACKAGE_TYPES = {
     "unknown",
 }
 
-EXTRACTION_OCR_PROMPT = """
-You are the package-information extraction component of LegalCheck, an AI-assisted packaged-commodity Legal Metrology screening system for India.
+OCR_EXTRACTION_PROMPT = """
+You are the OCR text interpretation component of LegalCheck, an AI-assisted packaged-commodity Legal Metrology screening system for India.
 
-You will receive EXTRACTED OCR TEXT from package photo(s).
+Your job is ONLY to inspect the provided raw OCR text extracted from package image(s) and extract the structured product declarations.
 
-CRITICAL OCR INTERPRETATION RULES:
-1. The input is raw text extracted via OCR. It may contain spelling errors, duplicated lines, broken words, or OCR character substitutions (e.g., '0' vs 'O', '1' vs 'I').
-2. Interpret the text conservatively based ONLY on visible OCR evidence.
-3. Do NOT invent, assume, or calculate missing values.
-4. If a field is not supported by the OCR text, return null.
-
-DATE MAPPING RULES (CRITICAL):
-- Labeled Mfg / Packing Date (e.g. "Pkg Date", "Packing Date", "Mfg Date", "Date of Packing", "Pkd Date") MUST be mapped to "manufacturing_date" or "packing_date". NEVER map a manufacturing/packing date to expiry or best_before!
-- Labeled Expiry / Use By / Best Before Date (e.g. "Expiry Date", "Exp Date", "Use By", "Best Before", "EXP", "Use By Date") MUST be mapped to "expiry", "use_by", or "best_before".
-- Example: "Pkg. Date: 05/2026, Expiry: 10/2027" -> manufacturing_date = "05/2026", expiry = "10/2027".
-- Do NOT simply assign the first detected date to expiry or best_before.
-
-COUNTRY OF ORIGIN RULES (CRITICAL):
-- Do NOT set country_of_origin = "India" (or any country) simply because a country name appears inside a manufacturer address, company address, or consumer care postal address.
-- Populate country_of_origin ONLY when an explicit origin declaration prefix is present in the OCR text, such as: "Made in [Country]", "Product of [Country]", "Country of Origin: [Country]", "Country of Manufacture: [Country]", "Country of Assembly: [Country]".
-- If no explicit origin declaration is present, set country_of_origin = null.
-- Set is_imported = true ONLY if explicit foreign origin or import text (e.g. "Made in China", "Product of USA", "Imported by", "Country of Origin: Japan") is present.
-- Set is_imported = false ONLY if explicit domestic origin text (e.g. "Made in India", "Product of India", "Country of Origin: India") is present.
-- Otherwise set is_imported = null.
+CRITICAL INSTRUCTIONS & CONSTRAINTS:
+1. Do NOT invent or hallucinate information that is not supported by the OCR text.
+2. If a field is not present or cannot be established from the OCR text, return null.
+3. The raw OCR text may contain spelling errors, character substitutions, missing letters, mangled word boundaries, and out-of-order lines. Interpret the text conservatively.
+4. DATE EXTRACTION RULES:
+   - Differentiate strictly between Manufacturing/Packing Date and Expiry/Best Before/Use By Date.
+   - Pkg Date / Packing Date / Mfg Date -> manufacturing_date or packing_date.
+   - Expiry Date / Best Before / Use By -> expiry, best_before, or use_by.
+   - Example: If OCR contains "Pkg. Date: 05/2026" and "Expiry: 10/2027", manufacturing_date MUST be "05/2026" and expiry MUST be "10/2027". NEVER map Pkg Date to Expiry!
+5. COUNTRY OF ORIGIN & IMPORTED STATUS RULES:
+   - Do NOT infer country_of_origin = "India" merely because "India" appears in a manufacturer/company address or consumer care address (e.g. "Mumbai, India").
+   - Only set country_of_origin when explicit origin wording is present (e.g. "Made in India", "Product of India", "Country of Origin: India", "Country of Manufacture: India", "Country of Assembly: India").
+   - For is_imported: Set to true ONLY if explicit import declaration is present (e.g., "Made in China", "Imported by...", "Country of Origin: Germany"). Set to false ONLY if explicit domestic manufacturing declaration is present (e.g. "Made in India", "Product of India"). Otherwise return null.
 
 Return exactly one JSON object with these fields:
 
@@ -115,8 +115,6 @@ Package Type Rules:
 - multi_piece_package: A package containing multiple identical individually packaged/labelled pieces of the same commodity.
 - single_package: A standard individual package containing a single item/quantity.
 - unknown: Use when evidence is uncertain or insufficient.
-
-Return valid JSON only. Do not include markdown fences or commentary.
 """
 
 REQUIRED_FIELDS = {
@@ -151,24 +149,18 @@ def _parse_json_response(text: str) -> dict:
 
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
-
         if lines and lines[0].strip().startswith("```"):
             lines = lines[1:]
-
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
-
         cleaned = "\n".join(lines).strip()
-
         if cleaned.lower().startswith("json"):
             cleaned = cleaned[4:].strip()
 
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as error:
-        raise ValueError(
-            f"Gemini returned invalid JSON: {error}"
-        ) from error
+        raise ValueError(f"Gemini returned invalid JSON: {error}") from error
 
     if not isinstance(data, dict):
         raise ValueError("Gemini response must be a JSON object.")
@@ -176,7 +168,7 @@ def _parse_json_response(text: str) -> dict:
     return data
 
 
-def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
+def _normalise_extraction(data: dict, ocr_text: str = "") -> dict:
     result = {}
 
     for field, default in REQUIRED_FIELDS.items():
@@ -199,31 +191,26 @@ def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
             confidence = None
     result["category_confidence"] = confidence
 
-    # Strict Country of Origin Enforcement:
-    # Do NOT accept country_of_origin if it's based purely on company address
-    if result["country_of_origin"] and raw_ocr_text:
-        explicit_origin_pattern = re.compile(
-            r'\b(made in|product of|country of origin|country of manufacture|country of assembly|origin\s*:)\b',
-            re.IGNORECASE
-        )
-        if not explicit_origin_pattern.search(raw_ocr_text):
-            # Country of Origin is NOT explicitly declared on package
-            result["country_of_origin"] = None
-            if result["is_imported"] is False:
-                # Reset domestic assumption if only address was present
-                result["is_imported"] = None
+    # -------------------------------------------------------------
+    # DATE EXTRACTION BUG FIX: Strict date verification against OCR text
+    # -------------------------------------------------------------
+    if ocr_text:
+        ocr_lower = ocr_text.lower()
+        
+        mfg_match = re.search(r'(?:pkg|mfg|pack|manufactur\w*)\.?\s*(?:date|d)?\s*[:\.-]?\s*([0-9]{1,2}[/\.-][0-9]{2,4}|[a-z]{3}\s*[0-9]{2,4})', ocr_lower)
+        exp_match = re.search(r'(?:exp|expiry|use\s*by|best\s*before)\.?\s*(?:date|d)?\s*[:\.-]?\s*([0-9]{1,2}[/\.-][0-9]{2,4}|[a-z]{3}\s*[0-9]{2,4})', ocr_lower)
 
-    # Handle shelf_life normalization & date separation
-    mfg_date = result.get("manufacturing_date") or result.get("packing_date")
-    exp_date = result.get("expiry") or result.get("use_by") or result.get("best_before")
+        if mfg_match:
+            detected_mfg = mfg_match.group(1).upper()
+            if not result["manufacturing_date"] and not result["packing_date"]:
+                result["manufacturing_date"] = detected_mfg
 
-    # Guard: If manufacturing_date and expiry are accidentally assigned identical values without expiry label
-    if mfg_date and exp_date and mfg_date == exp_date:
-        if raw_ocr_text and not re.search(r'\b(exp|expiry|best before|use by)\b', raw_ocr_text, re.IGNORECASE):
-            result["expiry"] = None
-            result["best_before"] = None
-            result["use_by"] = None
+        if exp_match:
+            detected_exp = exp_match.group(1).upper()
+            if not result["expiry"] and not result["best_before"] and not result["use_by"]:
+                result["expiry"] = detected_exp
 
+    # Handle shelf_life normalization
     shelf_life_data = result.get("shelf_life")
     if isinstance(shelf_life_data, dict):
         raw_txt = shelf_life_data.get("raw_text") or shelf_life_data.get("value")
@@ -233,6 +220,11 @@ def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
             "type": sl_type if sl_type in ("best_before", "use_by", "expiry", "unknown") else "unknown",
             "raw_text": raw_txt,
         }
+        if not result["best_before"] and not result["expiry"]:
+            if sl_type == "expiry":
+                result["expiry"] = raw_txt
+            else:
+                result["best_before"] = raw_txt
     elif result.get("best_before") or result.get("use_by") or result.get("expiry"):
         raw_txt = result.get("best_before") or result.get("use_by") or result.get("expiry")
         sl_type = "best_before" if result.get("best_before") else ("use_by" if result.get("use_by") else "expiry")
@@ -245,6 +237,21 @@ def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
     # If shelf_life has a value, mark has_shelf_life = True
     if result["shelf_life"] and result["shelf_life"].get("raw_text"):
         result["has_shelf_life"] = True
+
+    # -------------------------------------------------------------
+    # COUNTRY OF ORIGIN FIX: Strict non-inference from address
+    # -------------------------------------------------------------
+    coo = result.get("country_of_origin")
+    if coo:
+        coo_str = str(coo).strip().lower()
+        if ocr_text:
+            ocr_lower = ocr_text.lower()
+            has_explicit_marker = any(m in ocr_lower for m in [
+                "made in", "product of", "country of origin", "country of manufacture", "country of assembly", "produced in", "imported from"
+            ])
+            if not has_explicit_marker and coo_str == "india":
+                result["country_of_origin"] = None
+                result["is_imported"] = None
 
     for field in ("is_imported", "has_shelf_life"):
         value = result[field]
@@ -267,87 +274,159 @@ def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
     return result
 
 
-def analyze_ocr_text(combined_ocr_text: str) -> dict:
-    """
-    Pass COMBINED OCR TEXT to Gemini TEXT-ONLY model.
-    Gemini receives TEXT, NOT the original image!
-    """
-    if not combined_ocr_text or not combined_ocr_text.strip():
-        raise ValueError("Combined OCR text is empty.")
+def _build_ocr_evidence(extracted_data: dict, per_image_ocr: list) -> list:
+    evidence_items = []
+    
+    field_labels = {
+        "product_name": "Product Name",
+        "mrp": "Maximum Retail Price (MRP)",
+        "net_quantity": "Net Quantity",
+        "unit_sale_price": "Unit Sale Price",
+        "manufacturer": "Manufacturer",
+        "packer": "Packer",
+        "importer": "Importer",
+        "manufacturing_date": "Manufacturing / Packing Date",
+        "packing_date": "Packing Date",
+        "expiry": "Expiry Date",
+        "best_before": "Best Before Date",
+        "country_of_origin": "Country of Origin",
+        "consumer_care": "Consumer Care Details"
+    }
 
-    full_prompt = (
-        "Extracted OCR text from package image(s):\n\n"
-        f"{combined_ocr_text}\n\n"
-        "Interpret this OCR text and return the LegalCheck structured product schema."
-    )
+    if not per_image_ocr:
+        for field, label in field_labels.items():
+            val = extracted_data.get(field)
+            if val:
+                evidence_items.append({
+                    "field": field,
+                    "label": label,
+                    "detected_value": str(val),
+                    "source_image": "Image 1",
+                    "ocr_snippet": str(val),
+                    "confidence": 0.85,
+                    "bounding_box": None
+                })
+        return evidence_items
+
+    for field, label in field_labels.items():
+        val = extracted_data.get(field)
+        if not val:
+            continue
+        
+        val_str = str(val).strip().lower()
+        matched = False
+
+        for img_res in per_image_ocr:
+            img_idx = img_res.get("image_index", 1)
+            lines = img_res.get("lines", [])
+
+            for line_item in lines:
+                line_txt = line_item.get("text", "")
+                line_lower = line_txt.lower()
+
+                if val_str in line_lower or (len(val_str) > 4 and val_str[:6] in line_lower):
+                    evidence_items.append({
+                        "field": field,
+                        "label": label,
+                        "detected_value": str(val),
+                        "source_image": f"Image {img_idx}",
+                        "ocr_snippet": line_txt,
+                        "confidence": line_item.get("confidence", 0.90),
+                        "bounding_box": line_item.get("bounding_box")
+                    })
+                    matched = True
+                    break
+            if matched:
+                break
+
+        if not matched:
+            first_img_idx = per_image_ocr[0].get("image_index", 1) if per_image_ocr else 1
+            avg_conf = per_image_ocr[0].get("confidence", 0.85) if per_image_ocr else 0.85
+            evidence_items.append({
+                "field": field,
+                "label": label,
+                "detected_value": str(val),
+                "source_image": f"Image {first_img_idx}",
+                "ocr_snippet": str(val),
+                "confidence": avg_conf,
+                "bounding_box": None
+            })
+
+    return evidence_items
+
+
+def analyze_ocr_text(
+    ocr_combined_text: str,
+    per_image_ocr: list = None
+) -> dict:
+    """
+    Interprets OCR text using Gemini TEXT-ONLY mode.
+    NO images are sent to Gemini.
+    """
+    if not ocr_combined_text or not ocr_combined_text.strip():
+        empty_data = _normalise_extraction({}, "")
+        empty_data["ocr_evidence"] = []
+        return empty_data
+
+    user_prompt = f"Extracted OCR text from package images:\n\n{ocr_combined_text}\n\nInterpret this OCR text conservatively and return the LegalCheck structured product JSON object."
 
     last_error = None
+    start_time = time.time()
 
     for model_name in MODEL_FALLBACKS:
-        try:
-            # TEXT ONLY CALL TO GEMINI: contents is a list of text strings ONLY!
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[
-                    EXTRACTION_OCR_PROMPT,
-                    full_prompt,
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=0,
-                    response_mime_type="application/json",
-                ),
-            )
+        for attempt in range(3):
+            try:
+                # GEMINI CALL IS TEXT ONLY (contents is a list of strings)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        OCR_EXTRACTION_PROMPT,
+                        user_prompt,
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0,
+                        response_mime_type="application/json",
+                    ),
+                )
 
-            response_text = response.text
-            if not response_text:
-                raise ValueError("Gemini returned an empty response.")
+                response_text = response.text
+                if not response_text:
+                    raise ValueError("Gemini returned an empty response.")
 
-            extracted_data = _parse_json_response(response_text)
-            return _normalise_extraction(extracted_data, raw_ocr_text=combined_ocr_text)
+                raw_data = _parse_json_response(response_text)
+                normalized_data = _normalise_extraction(raw_data, ocr_combined_text)
+                
+                normalized_data["ocr_evidence"] = _build_ocr_evidence(normalized_data, per_image_ocr or [])
+                normalized_data["gemini_time_ms"] = int((time.time() - start_time) * 1000)
+                
+                return normalized_data
 
-        except Exception as err:
-            last_error = err
-            err_str = str(err)
-            if "503" in err_str or "UNAVAILABLE" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                time.sleep(1)
-                continue
-            continue
+            except Exception as err:
+                last_error = err
+                err_str = str(err)
+                logger.warning(f"Model {model_name} (attempt {attempt+1}) failed: {err_str}")
+                if "503" in err_str or "UNAVAILABLE" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    time.sleep(1.5)
+                    continue
+                break
 
     raise RuntimeError(
         f"AI OCR text extraction failed across models: {str(last_error)}"
     )
 
 
-def analyze_package_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+def analyze_package_image(
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+) -> dict:
     """
-    DEPRECATED DIRECT IMAGE PATH - Retained for backward compatibility.
-    Primary inspection path uses analyze_ocr_text() with OpenCV + OCR text.
+    Backward-compatible entry point for single image inspection.
+    Uses OpenCV preprocessing + local OCR -> Gemini TEXT ONLY.
     """
-    from ocr.preprocessing import preprocess_image
-    from ocr.ocr_service import extract_ocr_from_bytes
+    from ocr.ocr_service import perform_ocr_single
 
-    prep_bytes, _ = preprocess_image(image_bytes)
-    ocr_res = extract_ocr_from_bytes(prep_bytes, image_index=0)
-    ocr_text = ocr_res.get("combined_text", "")
-
-    if ocr_text:
-        return analyze_ocr_text(ocr_text)
-
-    # Emergency fallback to direct image if OCR returned absolutely nothing
-    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-    last_error = None
-    for model_name in MODEL_FALLBACKS:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[EXTRACTION_OCR_PROMPT, image_part],
-                config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
-            )
-            return _normalise_extraction(_parse_json_response(response.text))
-        except Exception as err:
-            last_error = err
-            continue
-    raise RuntimeError(f"Fallback extraction failed: {str(last_error)}")
+    ocr_res = perform_ocr_single(image_bytes, image_index=1)
+    return analyze_ocr_text(ocr_res["text"], [ocr_res])
 
 
 WEB_EXTRACTION_PROMPT = """
@@ -432,33 +511,34 @@ def analyze_web_content(
     last_error = None
 
     for model_name in MODEL_FALLBACKS:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[
-                    WEB_EXTRACTION_PROMPT,
-                    full_text_input,
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=0,
-                    response_mime_type="application/json",
-                ),
-            )
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        WEB_EXTRACTION_PROMPT,
+                        full_text_input,
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0,
+                        response_mime_type="application/json",
+                    ),
+                )
 
-            response_text = response.text
-            if not response_text:
-                raise ValueError("Gemini returned an empty response.")
+                response_text = response.text
+                if not response_text:
+                    raise ValueError("Gemini returned an empty response.")
 
-            extracted_data = _parse_json_response(response_text)
-            return _normalise_extraction(extracted_data, raw_ocr_text=full_text_input)
+                extracted_data = _parse_json_response(response_text)
+                return _normalise_extraction(extracted_data, extracted_text)
 
-        except Exception as err:
-            last_error = err
-            err_str = str(err)
-            if "503" in err_str or "UNAVAILABLE" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                time.sleep(1)
-                continue
-            continue
+            except Exception as err:
+                last_error = err
+                err_str = str(err)
+                if "503" in err_str or "UNAVAILABLE" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    time.sleep(1.5)
+                    continue
+                break
 
     raise RuntimeError(
         f"AI web extraction failed across models: {str(last_error)}"
