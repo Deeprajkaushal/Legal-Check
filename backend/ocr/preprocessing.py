@@ -21,8 +21,8 @@ def preprocess_image(image_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
 
     h, w = img_orig.shape[:2]
 
-    # Target dimensions: Max side 2048px, Min side 600px
-    max_dim = 2048
+    # Target dimensions: Max side 1200px, Min side 600px
+    max_dim = 1200
     min_dim = 600
 
     scale = 1.0

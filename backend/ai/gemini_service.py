@@ -454,6 +454,7 @@ def analyze_ocr_text(
                     config=types.GenerateContentConfig(
                         temperature=0,
                         response_mime_type="application/json",
+                        http_options=types.HttpOptions(timeout=5.0),
                     ),
                 )
 

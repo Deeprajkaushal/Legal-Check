@@ -1,7 +1,7 @@
 import time
 import logging
 from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -56,6 +56,7 @@ def health_check():
 
 @app.post("/inspect")
 async def inspect_package(
+    request: Request,
     image: Optional[UploadFile] = File(None),
     images: List[UploadFile] = File([]),
     files: List[UploadFile] = File([])
@@ -81,6 +82,16 @@ async def inspect_package(
     if not uploaded_files and image:
         if isinstance(image, UploadFile) and image.filename:
             uploaded_files.append(image)
+
+    # Priority 4: Fallback to reading raw request.form() for any UploadFile regardless of field key
+    if not uploaded_files:
+        try:
+            form = await request.form()
+            for key, val in form.multi_items():
+                if isinstance(val, UploadFile) and val.filename:
+                    uploaded_files.append(val)
+        except Exception as form_err:
+            logger.warning(f"Could not parse request.form(): {form_err}")
 
     logger.info(f"[INSPECT] Received {len(uploaded_files)} file(s): {[f.filename for f in uploaded_files]}")
 
