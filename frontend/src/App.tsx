@@ -99,11 +99,25 @@ export function App() {
     try {
       const formData = new FormData();
       images.forEach((img, i) => {
-        const imageFile = img.file.type
-          ? img.file
-          : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
+        const rawFile = img.file as File;
+        const imageFile = rawFile instanceof File
+          ? rawFile
+          : new File([rawFile], (rawFile as any)?.name || `package-${i + 1}.jpg`, {
+              type: (rawFile as any)?.type || 'image/jpeg',
+            });
+        
+        // Append actual File object to 'images', 'files', and 'image' keys for 100% multipart contract compatibility
         formData.append('images', imageFile, imageFile.name);
+        formData.append('files', imageFile, imageFile.name);
+        if (i === 0) {
+          formData.append('image', imageFile, imageFile.name);
+        }
       });
+
+      console.log(`[INSPECT UPLOAD] Prepared FormData with ${images.length} image file(s). Entries:`);
+      for (const [key, val] of formData.entries()) {
+        console.log(`- ${key}:`, val);
+      }
 
       const response = await fetch(`${API_URL}/inspect`, {
         method: 'POST',

@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import List, Optional, Union
+from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,7 +25,7 @@ app = FastAPI(
         "AI-assisted Legal Metrology "
         "compliance inspection system using OCR + Gemini Text-Only"
     ),
-    version="0.3.0"
+    version="0.3.1"
 )
 
 
@@ -49,7 +49,7 @@ def health_check():
         "status": "ok",
         "project": "LegalCheck",
         "problem_id": "SIH26034",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "ocr_pipeline": "OpenCV + RapidOCR + Gemini Text-Only"
     }
 
@@ -57,20 +57,25 @@ def health_check():
 @app.post("/inspect")
 async def inspect_package(
     image: Optional[UploadFile] = File(None),
-    images: Optional[Union[List[UploadFile], UploadFile]] = File(None)
+    images: List[UploadFile] = File([]),
+    files: List[UploadFile] = File([])
 ):
     total_start_time = time.time()
     uploaded_files: List[UploadFile] = []
 
-    if isinstance(images, list):
-        for item in images:
-            if isinstance(item, UploadFile):
-                uploaded_files.append(item)
-    elif isinstance(images, UploadFile):
-        uploaded_files.append(images)
-        
-    if isinstance(image, UploadFile) and image not in uploaded_files:
+    # Collect files from any possible multipart field key: images, files, or image
+    for source in (images, files):
+        if isinstance(source, list) and source:
+            for item in source:
+                if isinstance(item, UploadFile) and item.filename:
+                    uploaded_files.append(item)
+        elif isinstance(source, UploadFile) and source.filename:
+            uploaded_files.append(source)
+
+    if isinstance(image, UploadFile) and image.filename and image not in uploaded_files:
         uploaded_files.append(image)
+
+    logger.info(f"[INSPECT] Received {len(uploaded_files)} file(s): {[f'{f.filename} ({f.content_type})' for f in uploaded_files]}")
 
     if not uploaded_files:
         raise HTTPException(
