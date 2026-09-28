@@ -15,8 +15,9 @@ logger = logging.getLogger("legalcheck.ai")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 MODEL_FALLBACKS = [
-    "gemini-3.6-flash",
-    "gemini-flash-latest",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
 ]
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -441,8 +442,7 @@ def analyze_ocr_text(
     last_error = None
 
     if client:
-        # Fast single attempt on gemini-3.6-flash without 90s retries
-        for model_name in ["gemini-3.6-flash", "gemini-flash-latest"]:
+        for model_name in MODEL_FALLBACKS:
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -467,7 +467,7 @@ def analyze_ocr_text(
             except Exception as err:
                 last_error = err
                 logger.warning(f"Gemini model {model_name} failed: {err}")
-                break
+                continue
 
     # Instant local OCR parser fallback (0.001s execution)
     logger.warning(f"Using local OCR fallback parser (Gemini API status: {last_error})")
