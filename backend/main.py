@@ -25,7 +25,7 @@ app = FastAPI(
         "AI-assisted Legal Metrology "
         "compliance inspection system using OCR + Gemini Text-Only"
     ),
-    version="0.3.1"
+    version="0.3.2"
 )
 
 
@@ -49,7 +49,7 @@ def health_check():
         "status": "ok",
         "project": "LegalCheck",
         "problem_id": "SIH26034",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "ocr_pipeline": "OpenCV + RapidOCR + Gemini Text-Only"
     }
 
@@ -63,19 +63,26 @@ async def inspect_package(
     total_start_time = time.time()
     uploaded_files: List[UploadFile] = []
 
-    # Collect files from any possible multipart field key: images, files, or image
-    for source in (images, files):
-        if isinstance(source, list) and source:
-            for item in source:
-                if isinstance(item, UploadFile) and item.filename:
-                    uploaded_files.append(item)
-        elif isinstance(source, UploadFile) and source.filename:
-            uploaded_files.append(source)
+    # Priority 1: Check 'images'
+    if images:
+        if isinstance(images, list):
+            uploaded_files.extend([f for f in images if isinstance(f, UploadFile) and f.filename])
+        elif isinstance(images, UploadFile) and images.filename:
+            uploaded_files.append(images)
 
-    if isinstance(image, UploadFile) and image.filename and image not in uploaded_files:
-        uploaded_files.append(image)
+    # Priority 2: Check 'files'
+    if not uploaded_files and files:
+        if isinstance(files, list):
+            uploaded_files.extend([f for f in files if isinstance(f, UploadFile) and f.filename])
+        elif isinstance(files, UploadFile) and files.filename:
+            uploaded_files.append(files)
 
-    logger.info(f"[INSPECT] Received {len(uploaded_files)} file(s): {[f'{f.filename} ({f.content_type})' for f in uploaded_files]}")
+    # Priority 3: Check 'image'
+    if not uploaded_files and image:
+        if isinstance(image, UploadFile) and image.filename:
+            uploaded_files.append(image)
+
+    logger.info(f"[INSPECT] Received {len(uploaded_files)} file(s): {[f.filename for f in uploaded_files]}")
 
     if not uploaded_files:
         raise HTTPException(
@@ -121,7 +128,7 @@ async def inspect_package(
     combined_ocr_text = ocr_result.get("combined_text", "")
     per_image_ocr = ocr_result.get("per_image_results", [])
 
-    # 3. Gemini TEXT-ONLY Extraction (NO images sent!)
+    # 3. Gemini TEXT-ONLY Extraction (with local OCR fallback if Gemini API is busy)
     gemini_start = time.time()
     try:
         extracted_data = analyze_ocr_text(
@@ -129,7 +136,7 @@ async def inspect_package(
             per_image_ocr=per_image_ocr
         )
     except Exception as error:
-        logger.error(f"Gemini text interpretation failed: {error}")
+        logger.error(f"Text interpretation failed: {error}")
         raise HTTPException(
             status_code=503,
             detail=f"AI text extraction failed: {str(error)}"
@@ -146,7 +153,7 @@ async def inspect_package(
     compliance_result = check_compliance(extracted_data, source=source_info)
     compliance_duration = time.time() - compliance_start
 
-    # 5. Build Explainable Report
+    # 5. Build Explainable Report Locally
     report_start = time.time()
     report = build_inspection_report(
         extracted_data=extracted_data,

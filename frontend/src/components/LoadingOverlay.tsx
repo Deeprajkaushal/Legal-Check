@@ -14,7 +14,7 @@ export const LoadingOverlay: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
 
   useEffect(() => {
-    // Step transition timer (~400ms per step for fast response)
+    // Smooth step transition (~1.6s per step to align with ~10s total execution)
     const interval = setInterval(() => {
       setCurrentStep((prev) => {
         if (prev < PROCESSING_STEPS.length - 1) {
@@ -22,7 +22,7 @@ export const LoadingOverlay: React.FC = () => {
         }
         return prev;
       });
-    }, 450);
+    }, 1600);
 
     return () => clearInterval(interval);
   }, []);
