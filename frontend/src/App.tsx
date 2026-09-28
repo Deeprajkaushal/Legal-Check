@@ -106,18 +106,10 @@ export function App() {
               type: (rawFile as any)?.type || 'image/jpeg',
             });
         
-        // Append actual File object to 'images', 'files', and 'image' keys for 100% multipart contract compatibility
         formData.append('images', imageFile, imageFile.name);
-        formData.append('files', imageFile, imageFile.name);
-        if (i === 0) {
-          formData.append('image', imageFile, imageFile.name);
-        }
       });
 
-      console.log(`[INSPECT UPLOAD] Prepared FormData with ${images.length} image file(s). Entries:`);
-      for (const [key, val] of formData.entries()) {
-        console.log(`- ${key}:`, val);
-      }
+      console.log(`[INSPECT UPLOAD] Prepared FormData with ${images.length} image file(s).`);
 
       const response = await fetch(`${API_URL}/inspect`, {
         method: 'POST',
