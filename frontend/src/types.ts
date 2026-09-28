@@ -105,38 +105,6 @@ export type ComplianceResult = {
   visual_checks: VisualCheckItem[];
 };
 
-export type OcrEvidenceItem = {
-  field: string;
-  label: string;
-  detected_value: string;
-  source_image: string;
-  ocr_snippet: string;
-  confidence: number;
-  bounding_box?: unknown;
-};
-
-export type OcrDebugInfo = {
-  images_processed: number;
-  ocr_status: string;
-  gemini_text_only: boolean;
-  combined_ocr_text?: string;
-  per_image_ocr?: {
-    image_index: number;
-    line_count: number;
-    avg_confidence: number;
-    text_preview: string;
-  }[];
-  ocr_evidence?: OcrEvidenceItem[];
-  timing?: {
-    upload_ms?: number;
-    ocr_ms?: number;
-    gemini_ms?: number;
-    compliance_ms?: number;
-    report_ms?: number;
-    total_ms?: number;
-  };
-};
-
 export type InspectionResponse = {
   inspection_id: string;
   inspection_type?: 'package' | 'digital';
@@ -175,7 +143,6 @@ export type InspectionResponse = {
     message: string;
   };
   legal_references?: Record<string, string>;
-  ocr_debug?: OcrDebugInfo;
 };
 
 export type SelectedImage = {
