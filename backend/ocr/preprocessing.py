@@ -5,10 +5,7 @@ import numpy as np
 def preprocess_image(image_bytes: bytes) -> tuple[bytes, dict]:
     """
     Preprocess uploaded package image before passing to OCR.
-    Enhances contrast, resizes if needed, applies CLAHE and sharpening.
-
-    Returns:
-        (preprocessed_image_bytes, metadata)
+    Lightweight, RAM-efficient OpenCV pipeline for cloud deployment.
     """
     if not image_bytes:
         return image_bytes, {"processed": False, "reason": "empty_bytes"}
@@ -23,30 +20,25 @@ def preprocess_image(image_bytes: bytes) -> tuple[bytes, dict]:
 
         orig_h, orig_w = img.shape[:2]
 
-        # 2. Resize / Upscale if image is too small or downscale to max 2000px for RAM efficiency
+        # 2. Downscale to max 1500px for high performance and low memory
         target_img = img
         scale_factor = 1.0
 
-        if max(orig_h, orig_w) > 2000:
-            scale_factor = 2000.0 / max(orig_h, orig_w)
+        if max(orig_h, orig_w) > 1500:
+            scale_factor = 1500.0 / max(orig_h, orig_w)
             new_w = int(orig_w * scale_factor)
             new_h = int(orig_h * scale_factor)
             target_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        elif min(orig_h, orig_w) < 800:
-            scale_factor = max(1.4, 1000.0 / min(orig_h, orig_w))
-            new_w = int(orig_w * scale_factor)
-            new_h = int(orig_h * scale_factor)
-            target_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
         # 3. Grayscale conversion
         gray = cv2.cvtColor(target_img, cv2.COLOR_BGR2GRAY)
 
-        # 4. Contrast enhancement via CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        # 4. Contrast enhancement via CLAHE
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         contrast_enhanced = clahe.apply(gray)
 
-        # 5. Denoising
-        denoised = cv2.fastNlMeansDenoising(contrast_enhanced, h=8, templateWindowSize=7, searchWindowSize=21)
+        # 5. Fast Gaussian blur for noise suppression (RAM friendly)
+        denoised = cv2.GaussianBlur(contrast_enhanced, (3, 3), 0)
 
         # 6. Sharpening filter
         kernel = np.array([
@@ -68,7 +60,7 @@ def preprocess_image(image_bytes: bytes) -> tuple[bytes, dict]:
             "original_dimensions": [orig_w, orig_h],
             "processed_dimensions": [sharpened.shape[1], sharpened.shape[0]],
             "scale_factor": round(scale_factor, 2),
-            "steps": ["resize", "grayscale", "clahe_contrast", "denoising", "sharpening"]
+            "steps": ["resize", "grayscale", "clahe_contrast", "gaussian_blur", "sharpening"]
         }
 
         return processed_bytes, metadata
