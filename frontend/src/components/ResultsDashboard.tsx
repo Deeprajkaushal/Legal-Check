@@ -8,6 +8,7 @@ interface ResultsDashboardProps {
 
 export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNewInspection }) => {
   const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>({});
+  const [showOcrEvidence, setShowOcrEvidence] = useState(false);
 
   const toggleRuleExpand = (ruleId: string) => {
     setExpandedRules((prev) => ({ ...prev, [ruleId]: !prev[ruleId] }));
@@ -388,6 +389,61 @@ export const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ result, onNe
           </div>
         </div>
       </div>
+
+      {/* OCR Status & Debug View */}
+      {result.ocr_debug && (
+        <section className="results-section print-hide">
+          <div className="ocr-debug-card">
+            <div className="ocr-debug-header">
+              <div className="ocr-status-badges">
+                <span className="ocr-status-badge success">
+                  ✓ {result.ocr_debug.images_processed} Image{result.ocr_debug.images_processed > 1 ? 's' : ''} Processed (OpenCV)
+                </span>
+                <span className="ocr-status-badge success">
+                  ✓ OCR Completed ({result.ocr_debug.total_words} words, {Math.round(result.ocr_debug.average_confidence * 100)}% conf)
+                </span>
+                <span className="ocr-status-badge text-only">
+                  ✓ Gemini Text Interpretation Completed (TEXT ONLY)
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="btn-toggle-ocr-evidence"
+                onClick={() => setShowOcrEvidence(!showOcrEvidence)}
+              >
+                <span>{showOcrEvidence ? 'Hide OCR Evidence' : 'Show OCR Evidence'}</span>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  style={{ transform: showOcrEvidence ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            </div>
+
+            {showOcrEvidence && (
+              <div className="ocr-evidence-body">
+                <h4 className="ocr-evidence-title">Extracted OCR Text Evidence</h4>
+                {result.ocr_debug.evidence?.map((item) => (
+                  <div key={item.image_index} className="ocr-evidence-item">
+                    <div className="ocr-item-meta">
+                      <strong>Image {item.image_index + 1}: {item.filename}</strong>
+                      <span>Confidence: {Math.round(item.confidence * 100)}% · {item.words} words</span>
+                    </div>
+                    <pre className="ocr-text-box">{item.text || '(No text detected in this image)'}</pre>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Primary Package Declarations Grid */}
       <section className="results-section print-hide">

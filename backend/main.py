@@ -2,7 +2,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ai.gemini_service import analyze_package_image, analyze_web_content
+from ai.gemini_service import analyze_ocr_text, analyze_web_content
+from ocr.preprocessing import preprocess_image
+from ocr.ocr_service import extract_ocr_from_bytes, combine_multi_image_ocr
 from rules_engine.compliance import check_compliance
 from reporting.report import build_inspection_report
 from web.web_service import fetch_and_extract_web_content
@@ -18,7 +20,7 @@ app = FastAPI(
         "AI-assisted Legal Metrology "
         "compliance inspection system"
     ),
-    version="0.2.0"
+    version="0.3.0"
 )
 
 
@@ -41,71 +43,126 @@ def health_check():
         "status": "ok",
         "project": "LegalCheck",
         "problem_id": "SIH26034",
-        "version": "0.2.0"
+        "pipeline": "OpenCV -> Local OCR -> Gemini Text-Only -> Rules Engine",
+        "version": "0.3.0"
     }
 
 
 @app.post("/inspect")
 async def inspect_package(
-    image: UploadFile = File(...)
+    image: UploadFile = File(None),
+    images: list[UploadFile] = File(None)
 ):
-    if not image.content_type:
+    """
+    Inspect one or multiple package images using OpenCV preprocessing,
+    local OCR extraction, combined text-only Gemini interpretation,
+    and deterministic Legal Metrology compliance rules.
+    """
+    upload_list = []
+    if images and len(images) > 0:
+        upload_list = images
+    elif image is not None:
+        upload_list = [image]
+
+    if not upload_list:
         raise HTTPException(
             status_code=400,
-            detail="Could not determine image type."
+            detail="Please upload at least one package image."
         )
 
-    if not image.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload an image file."
+    processed_ocr_results = []
+    filenames = []
+
+    # 1. OpenCV Preprocessing & Local OCR per image
+    for idx, img in enumerate(upload_list):
+        if not img.content_type or not img.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {img.filename or idx + 1} is not a valid image."
+            )
+
+        raw_bytes = await img.read()
+        if not raw_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded image {img.filename or idx + 1} is empty."
+            )
+
+        fn = img.filename or f"package_photo_{idx + 1}.jpg"
+        filenames.append(fn)
+
+        # OpenCV Preprocessing
+        prep_bytes, prep_meta = preprocess_image(raw_bytes)
+
+        # Local OCR Extraction
+        ocr_res = extract_ocr_from_bytes(
+            image_bytes=prep_bytes,
+            image_index=idx,
+            filename=fn
         )
+        processed_ocr_results.append(ocr_res)
 
-    image_bytes = await image.read()
+    # 2. Combine OCR text across all uploaded package images
+    combined_ocr = combine_multi_image_ocr(processed_ocr_results)
+    combined_text = combined_ocr.get("combined_text", "").strip()
 
-    if not image_bytes:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded image is empty."
-        )
+    if not combined_text:
+        # Fallback text if OCR found no readable characters
+        combined_text = f"Package images provided ({', '.join(filenames)}), but no legible text was extracted by local OCR."
 
-    # ---------------------------------------------
-    # AI extraction + classification
-    # ---------------------------------------------
-
+    # 3. Text-Only AI Extraction via Gemini
     try:
-        extracted_data = analyze_package_image(
-            image_bytes=image_bytes,
-            mime_type=image.content_type
-        )
+        extracted_data = analyze_ocr_text(combined_ocr_text=combined_text)
     except Exception as error:
         raise HTTPException(
             status_code=503,
-            detail=f"AI extraction failed: {str(error)}"
+            detail=f"AI OCR text extraction failed: {str(error)}"
         )
 
-    # ---------------------------------------------
-    # Deterministic compliance analysis
-    # ---------------------------------------------
-
+    # 4. Deterministic compliance analysis
+    source_info = {
+        "type": "file",
+        "filenames": filenames,
+        "image_count": len(filenames)
+    }
     compliance_result = check_compliance(
-        extracted_data
+        extracted_data,
+        inspection_type="package",
+        source=source_info
     )
 
-    # ---------------------------------------------
-    # Explainable inspection report
-    # ---------------------------------------------
-
+    # 5. Build explainable report
     report = build_inspection_report(
         extracted_data=extracted_data,
         compliance_result=compliance_result,
         inspection_type="package",
-        source={"type": "file", "filename": image.filename}
+        source=source_info
     )
 
     report["file"] = {
-        "filename": image.filename,
-        "content_type": image.content_type
+        "filename": filenames[0] if filenames else "package.jpg",
+        "filenames": filenames,
+        "count": len(filenames)
+    }
+
+    # 6. Add development/debug OCR evidence metadata
+    report["ocr_debug"] = {
+        "images_processed": len(upload_list),
+        "ocr_completed": True,
+        "gemini_text_only": True,
+        "average_confidence": combined_ocr.get("average_confidence", 0.0),
+        "total_words": combined_ocr.get("total_words", 0),
+        "combined_text": combined_text,
+        "evidence": [
+            {
+                "image_index": res.get("image_index", i),
+                "filename": res.get("filename", f"image_{i+1}.jpg"),
+                "confidence": res.get("avg_confidence", 0.0),
+                "words": res.get("total_words", 0),
+                "text": res.get("combined_text", "")
+            }
+            for i, res in enumerate(processed_ocr_results)
+        ]
     }
 
     report["project"] = "LegalCheck"
@@ -137,7 +194,6 @@ async def inspect_url(payload: URLInspectRequest):
         if reason == "security_error":
             raise HTTPException(status_code=400, detail=err_msg)
 
-        # Handle JS-only/unextractable or timeout pages gracefully with requires_human_verification
         empty_data = {
             "product_name": web_res.get("page_title") or None,
             "manufacturer": None,
@@ -202,4 +258,4 @@ async def inspect_url(payload: URLInspectRequest):
     report["project"] = "LegalCheck"
     report["problem_id"] = "SIH26034"
 
-    return report
+    return report

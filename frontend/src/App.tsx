@@ -11,7 +11,6 @@ import { HowItWorks } from './components/HowItWorks';
 import { AboutSection } from './components/AboutSection';
 import { Footer } from './components/Footer';
 import type { InspectionResponse, AppState, ActiveTab, SelectedImage, HistoryItem } from './types';
-import { combineInspectionResults } from './utils/multiImage';
 import { getHistory, saveToHistory, clearHistory, createThumbnail } from './utils/history';
 import './App.css';
 
@@ -97,48 +96,44 @@ export function App() {
     setInspectingIndex(0);
     setErrorMsg('');
 
-    const responses: InspectionResponse[] = [];
-
     try {
-      for (let i = 0; i < images.length; i++) {
-        setInspectingIndex(i);
-        const img = images[i];
-        const formData = new FormData();
-        
-        // Ensure image file has filename and valid mime type
-        const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
+      const formData = new FormData();
+      if (images.length === 1) {
+        const img = images[0];
+        const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || 'package.jpg', { type: 'image/jpeg' });
         formData.append('image', imageFile, imageFile.name);
-
-        const response = await fetch(`${API_URL}/inspect`, {
-          method: 'POST',
-          body: formData,
+      } else {
+        images.forEach((img, i) => {
+          const imageFile = img.file.type ? img.file : new File([img.file], img.file.name || `package-${i + 1}.jpg`, { type: 'image/jpeg' });
+          formData.append('images', imageFile, imageFile.name);
         });
-
-        // Safely parse response body to avoid 'Unexpected end of JSON input'
-        const rawText = await response.text();
-        let data: Record<string, unknown> = {};
-        if (rawText) {
-          try {
-            data = JSON.parse(rawText);
-          } catch {
-            data = { detail: rawText };
-          }
-        }
-
-        if (!response.ok) {
-          let detail = typeof data.detail === 'string' ? data.detail : (data.message as string) || `Server returned HTTP ${response.status}.`;
-          if (detail.includes('429') || detail.includes('RESOURCE_EXHAUSTED')) {
-            detail = 'Gemini AI rate limit temporarily reached. Please wait 15-30 seconds and try again.';
-          }
-          throw new Error(`[Image ${i + 1}] ${detail}`);
-        }
-
-        responses.push(data as unknown as InspectionResponse);
       }
 
-      // Aggregate multi-image inspection responses
-      const combinedResult = combineInspectionResults(responses, images.length);
-      setResult(combinedResult);
+      const response = await fetch(`${API_URL}/inspect`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const rawText = await response.text();
+      let data: Record<string, unknown> = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          data = { detail: rawText };
+        }
+      }
+
+      if (!response.ok) {
+        let detail = typeof data.detail === 'string' ? data.detail : (data.message as string) || `Server returned HTTP ${response.status}.`;
+        if (detail.includes('429') || detail.includes('RESOURCE_EXHAUSTED')) {
+          detail = 'Gemini AI rate limit temporarily reached. Please wait 15-30 seconds and try again.';
+        }
+        throw new Error(detail);
+      }
+
+      const inspectRes = data as unknown as InspectionResponse;
+      setResult(inspectRes);
       setAppState('success');
 
       // Create thumbnail for history
@@ -150,7 +145,7 @@ export function App() {
       }
 
       // Save to localStorage history (max 5 items)
-      const updatedHistory = saveToHistory(combinedResult, thumbUrl);
+      const updatedHistory = saveToHistory(inspectRes, thumbUrl);
       setHistoryItems(updatedHistory);
     } catch (err) {
       console.error('Inspection API Error:', err);

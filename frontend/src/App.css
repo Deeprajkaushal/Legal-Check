@@ -2133,3 +2133,184 @@ body {
     gap: 2px;
   }
 }
+
+/* ==========================================================================
+   9. OCR Pipeline Stepper & Debug Views
+   ========================================================================== */
+
+.pipeline-stepper-wrapper {
+  margin-top: 24px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.pipeline-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.pipeline-step-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-subtle);
+  opacity: 0.5;
+  transition: all 0.2s ease;
+}
+
+.pipeline-step-item.current {
+  opacity: 1;
+  border-color: var(--accent-primary);
+  background: #ffffff;
+  box-shadow: var(--shadow-subtle);
+}
+
+.pipeline-step-item.completed {
+  opacity: 0.9;
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.step-indicator {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipeline-step-item.current .step-indicator {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+.pipeline-step-item.completed .step-indicator {
+  background: #16a34a;
+  color: #ffffff;
+}
+
+.step-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.step-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.step-desc {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+/* OCR Debug Card */
+.ocr-debug-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+
+.ocr-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ocr-status-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ocr-status-badge {
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.ocr-status-badge.success {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.ocr-status-badge.text-only {
+  background: #e0e7ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+.btn-toggle-ocr-evidence {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.btn-toggle-ocr-evidence:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.ocr-evidence-body {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.ocr-evidence-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.ocr-evidence-item {
+  margin-bottom: 12px;
+}
+
+.ocr-item-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.ocr-text-box {
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: monospace;
+  font-size: 0.8rem;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+

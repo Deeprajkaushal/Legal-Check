@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 
 from dotenv import load_dotenv
@@ -42,14 +43,30 @@ ALLOWED_PACKAGE_TYPES = {
     "unknown",
 }
 
-EXTRACTION_PROMPT = """
-You are the package-information extraction component of LegalCheck,
-an AI-assisted packaged-commodity Legal Metrology screening system for India.
+EXTRACTION_OCR_PROMPT = """
+You are the package-information extraction component of LegalCheck, an AI-assisted packaged-commodity Legal Metrology screening system for India.
 
-Your job is ONLY to inspect the supplied package image and extract information
-that is visibly printed on the package. Do NOT decide whether the package is
-legally compliant. Do NOT invent missing information. Do NOT calculate values
-that are not explicitly printed.
+You will receive EXTRACTED OCR TEXT from package photo(s).
+
+CRITICAL OCR INTERPRETATION RULES:
+1. The input is raw text extracted via OCR. It may contain spelling errors, duplicated lines, broken words, or OCR character substitutions (e.g., '0' vs 'O', '1' vs 'I').
+2. Interpret the text conservatively based ONLY on visible OCR evidence.
+3. Do NOT invent, assume, or calculate missing values.
+4. If a field is not supported by the OCR text, return null.
+
+DATE MAPPING RULES (CRITICAL):
+- Labeled Mfg / Packing Date (e.g. "Pkg Date", "Packing Date", "Mfg Date", "Date of Packing", "Pkd Date") MUST be mapped to "manufacturing_date" or "packing_date". NEVER map a manufacturing/packing date to expiry or best_before!
+- Labeled Expiry / Use By / Best Before Date (e.g. "Expiry Date", "Exp Date", "Use By", "Best Before", "EXP", "Use By Date") MUST be mapped to "expiry", "use_by", or "best_before".
+- Example: "Pkg. Date: 05/2026, Expiry: 10/2027" -> manufacturing_date = "05/2026", expiry = "10/2027".
+- Do NOT simply assign the first detected date to expiry or best_before.
+
+COUNTRY OF ORIGIN RULES (CRITICAL):
+- Do NOT set country_of_origin = "India" (or any country) simply because a country name appears inside a manufacturer address, company address, or consumer care postal address.
+- Populate country_of_origin ONLY when an explicit origin declaration prefix is present in the OCR text, such as: "Made in [Country]", "Product of [Country]", "Country of Origin: [Country]", "Country of Manufacture: [Country]", "Country of Assembly: [Country]".
+- If no explicit origin declaration is present, set country_of_origin = null.
+- Set is_imported = true ONLY if explicit foreign origin or import text (e.g. "Made in China", "Product of USA", "Imported by", "Country of Origin: Japan") is present.
+- Set is_imported = false ONLY if explicit domestic origin text (e.g. "Made in India", "Product of India", "Country of Origin: India") is present.
+- Otherwise set is_imported = null.
 
 Return exactly one JSON object with these fields:
 
@@ -99,19 +116,7 @@ Package Type Rules:
 - single_package: A standard individual package containing a single item/quantity.
 - unknown: Use when evidence is uncertain or insufficient.
 
-Extraction & Classification Rules:
-
-1. Read only information that is visible or reasonably legible in the image.
-2. If a field is not visible or cannot be reliably read, return null.
-3. Preserve the printed wording/value as closely as possible.
-4. For shelf_life, recognize labels such as "Best Before", "Best Before Date", "Use By", "Use By Date", "Expiry", "Expiry Date", "Expires", "Expiration Date".
-   Preserve exact detected wording in raw_text. Do not invent a date.
-5. For MRP and Unit Sale Price: They are legally distinct. Extract MRP exactly as visible. Extract Unit Sale Price ONLY when explicitly printed as a price per unit/g/ml/kg/L. Never calculate Unit Sale Price from MRP and quantity.
-6. For is_imported: Set to true ONLY when explicit import evidence is visible (e.g., "Made in [foreign country]", "Product of [foreign country]", "Imported by", "Country of Origin [foreign country]").
-   Set to false ONLY when explicit domestic evidence is visible (e.g., "Made in India", "Manufactured in India").
-   If evidence is insufficient or country of origin text is not found, return is_imported = null (DO NOT assume false).
-7. For has_shelf_life: true when best-before/use-by/expiry declaration is visible or applicable to the commodity type.
-8. Return valid JSON only. Do not include markdown fences or commentary.
+Return valid JSON only. Do not include markdown fences or commentary.
 """
 
 REQUIRED_FIELDS = {
@@ -171,7 +176,7 @@ def _parse_json_response(text: str) -> dict:
     return data
 
 
-def _normalise_extraction(data: dict) -> dict:
+def _normalise_extraction(data: dict, raw_ocr_text: str = "") -> dict:
     result = {}
 
     for field, default in REQUIRED_FIELDS.items():
@@ -194,7 +199,31 @@ def _normalise_extraction(data: dict) -> dict:
             confidence = None
     result["category_confidence"] = confidence
 
-    # Handle shelf_life normalization
+    # Strict Country of Origin Enforcement:
+    # Do NOT accept country_of_origin if it's based purely on company address
+    if result["country_of_origin"] and raw_ocr_text:
+        explicit_origin_pattern = re.compile(
+            r'\b(made in|product of|country of origin|country of manufacture|country of assembly|origin\s*:)\b',
+            re.IGNORECASE
+        )
+        if not explicit_origin_pattern.search(raw_ocr_text):
+            # Country of Origin is NOT explicitly declared on package
+            result["country_of_origin"] = None
+            if result["is_imported"] is False:
+                # Reset domestic assumption if only address was present
+                result["is_imported"] = None
+
+    # Handle shelf_life normalization & date separation
+    mfg_date = result.get("manufacturing_date") or result.get("packing_date")
+    exp_date = result.get("expiry") or result.get("use_by") or result.get("best_before")
+
+    # Guard: If manufacturing_date and expiry are accidentally assigned identical values without expiry label
+    if mfg_date and exp_date and mfg_date == exp_date:
+        if raw_ocr_text and not re.search(r'\b(exp|expiry|best before|use by)\b', raw_ocr_text, re.IGNORECASE):
+            result["expiry"] = None
+            result["best_before"] = None
+            result["use_by"] = None
+
     shelf_life_data = result.get("shelf_life")
     if isinstance(shelf_life_data, dict):
         raw_txt = shelf_life_data.get("raw_text") or shelf_life_data.get("value")
@@ -204,8 +233,6 @@ def _normalise_extraction(data: dict) -> dict:
             "type": sl_type if sl_type in ("best_before", "use_by", "expiry", "unknown") else "unknown",
             "raw_text": raw_txt,
         }
-        if not result["best_before"]:
-            result["best_before"] = raw_txt
     elif result.get("best_before") or result.get("use_by") or result.get("expiry"):
         raw_txt = result.get("best_before") or result.get("use_by") or result.get("expiry")
         sl_type = "best_before" if result.get("best_before") else ("use_by" if result.get("use_by") else "expiry")
@@ -240,30 +267,30 @@ def _normalise_extraction(data: dict) -> dict:
     return result
 
 
-def analyze_package_image(
-    image_bytes: bytes,
-    mime_type: str,
-) -> dict:
-    if not image_bytes:
-        raise ValueError("Image data is empty.")
+def analyze_ocr_text(combined_ocr_text: str) -> dict:
+    """
+    Pass COMBINED OCR TEXT to Gemini TEXT-ONLY model.
+    Gemini receives TEXT, NOT the original image!
+    """
+    if not combined_ocr_text or not combined_ocr_text.strip():
+        raise ValueError("Combined OCR text is empty.")
 
-    if not mime_type.startswith("image/"):
-        raise ValueError("The uploaded file must be an image.")
-
-    image_part = types.Part.from_bytes(
-        data=image_bytes,
-        mime_type=mime_type,
+    full_prompt = (
+        "Extracted OCR text from package image(s):\n\n"
+        f"{combined_ocr_text}\n\n"
+        "Interpret this OCR text and return the LegalCheck structured product schema."
     )
 
     last_error = None
 
     for model_name in MODEL_FALLBACKS:
         try:
+            # TEXT ONLY CALL TO GEMINI: contents is a list of text strings ONLY!
             response = client.models.generate_content(
                 model=model_name,
                 contents=[
-                    EXTRACTION_PROMPT,
-                    image_part,
+                    EXTRACTION_OCR_PROMPT,
+                    full_prompt,
                 ],
                 config=types.GenerateContentConfig(
                     temperature=0,
@@ -276,7 +303,7 @@ def analyze_package_image(
                 raise ValueError("Gemini returned an empty response.")
 
             extracted_data = _parse_json_response(response_text)
-            return _normalise_extraction(extracted_data)
+            return _normalise_extraction(extracted_data, raw_ocr_text=combined_ocr_text)
 
         except Exception as err:
             last_error = err
@@ -287,8 +314,40 @@ def analyze_package_image(
             continue
 
     raise RuntimeError(
-        f"AI extraction failed across models: {str(last_error)}"
+        f"AI OCR text extraction failed across models: {str(last_error)}"
     )
+
+
+def analyze_package_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    """
+    DEPRECATED DIRECT IMAGE PATH - Retained for backward compatibility.
+    Primary inspection path uses analyze_ocr_text() with OpenCV + OCR text.
+    """
+    from ocr.preprocessing import preprocess_image
+    from ocr.ocr_service import extract_ocr_from_bytes
+
+    prep_bytes, _ = preprocess_image(image_bytes)
+    ocr_res = extract_ocr_from_bytes(prep_bytes, image_index=0)
+    ocr_text = ocr_res.get("combined_text", "")
+
+    if ocr_text:
+        return analyze_ocr_text(ocr_text)
+
+    # Emergency fallback to direct image if OCR returned absolutely nothing
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+    last_error = None
+    for model_name in MODEL_FALLBACKS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[EXTRACTION_OCR_PROMPT, image_part],
+                config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json")
+            )
+            return _normalise_extraction(_parse_json_response(response.text))
+        except Exception as err:
+            last_error = err
+            continue
+    raise RuntimeError(f"Fallback extraction failed: {str(last_error)}")
 
 
 WEB_EXTRACTION_PROMPT = """
@@ -391,7 +450,7 @@ def analyze_web_content(
                 raise ValueError("Gemini returned an empty response.")
 
             extracted_data = _parse_json_response(response_text)
-            return _normalise_extraction(extracted_data)
+            return _normalise_extraction(extracted_data, raw_ocr_text=full_text_input)
 
         except Exception as err:
             last_error = err
@@ -404,4 +463,3 @@ def analyze_web_content(
     raise RuntimeError(
         f"AI web extraction failed across models: {str(last_error)}"
     )
-
